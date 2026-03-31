@@ -1,0 +1,137 @@
+// --- 1. Memory State Management ---
+let isVisible = localStorage.getItem("zav_stealth") !== "false"; 
+let isMasterActive = localStorage.getItem("zav_killswitch") !== "false"; 
+
+// --- 2. Clean Up ---
+if (document.getElementById("zav-panel")) document.getElementById("zav-panel").remove();
+document.querySelectorAll(".zav-overlay").forEach(el => el.remove());
+
+// --- 3. Panel ---
+const panel = document.createElement("div");
+panel.id = "zav-panel";
+panel.innerHTML = `<div class="zav-panel-row"><span id="zav-panel-text" style="flex-grow: 1;">SCANNING...</span><div id="zav-indicator" class="zav-indicator"></div></div>`;
+document.body.appendChild(panel);
+panel.style.opacity = isVisible ? "1" : "0";
+if (!isMasterActive) panel.style.display = "none";
+
+let panelText = document.getElementById("zav-panel-text");
+let indicator = document.getElementById("zav-indicator");
+
+let targetElement = null;
+let inputElement = null;
+let overlay = null;
+let targetText = "";
+let userTyped = "";
+let spanCache = [];
+let isActive = false;
+let showCursor = false;
+let activeDotIndex = -1;
+let currentLineTop = -1;
+
+// --- 4. Global Hotkeys ---
+document.addEventListener("keydown", (e) => {
+    if (e.key === "F8") { e.preventDefault(); isMasterActive = !isMasterActive; localStorage.setItem("zav_killswitch", isMasterActive); location.reload(); }
+    if (e.key === "F4") { e.preventDefault(); isVisible = !isVisible; localStorage.setItem("zav_stealth", isVisible); panel.style.opacity = isVisible ? "1" : "0"; if (overlay) overlay.style.opacity = isVisible ? "1" : "0"; }
+    if (e.key === "F2") { e.preventDefault(); showCursor = true; fastRender(); }
+});
+document.addEventListener("keyup", (e) => { if (e.key === "F2") { showCursor = false; fastRender(); } });
+
+// --- 5. THE FIX: Live Sync Logic ---
+// This replaces the old Backspace/Keydown counting logic
+const syncLoop = setInterval(() => {
+    if (!isMasterActive) return;
+
+    const source = document.querySelector('.ql-editor[contenteditable="false"]');
+    const input = document.querySelector('.ql-editor[contenteditable="true"]');
+
+    if (source && source !== targetElement) {
+        targetElement = source;
+        inputElement = input;
+        initOverlay();
+    }
+
+    if (isActive && inputElement) {
+        // Sync userTyped directly from the ZAV input box
+        let currentInput = inputElement.innerText.replace(/\u00A0/g, ' ').replace(/[\n\r]/g, '');
+        if (currentInput !== userTyped) {
+            userTyped = currentInput;
+            checkLineChange();
+            fastRender();
+        }
+    }
+}, 50);
+
+function initOverlay() {
+    // Clean target text: remove newlines so indexing matches perfectly
+    targetText = targetElement.innerText.replace(/\u00A0/g, ' ').replace(/[\n\r]/g, '');
+    userTyped = "";
+    spanCache = [];
+    currentLineTop = -1;
+
+    if (overlay) overlay.remove();
+    overlay = document.createElement("div");
+    overlay.className = "zav-overlay";
+    document.body.appendChild(overlay);
+
+    const style = window.getComputedStyle(targetElement);
+    overlay.style.cssText = `font-size: ${style.fontSize}; font-family: ${style.fontFamily}; font-weight: ${style.fontWeight}; line-height: ${style.lineHeight}; padding: ${style.padding}; letter-spacing: ${style.letterSpacing}; white-space: pre-wrap; word-break: break-all; opacity: ${isVisible ? "1" : "0"};`;
+
+    let fragment = document.createDocumentFragment();
+    for (let char of targetText) {
+        let span = document.createElement("span");
+        span.innerText = char;
+        span.className = "z-correct";
+        fragment.appendChild(span);
+        spanCache.push(span);
+    }
+    overlay.appendChild(fragment);
+
+    isActive = true;
+    panelText.innerText = "LOCKED ON";
+    indicator.style.backgroundColor = "#00E676";
+    syncPosition();
+}
+
+// --- 6. Rendering ---
+function fastRender() {
+    if (!overlay || spanCache.length === 0) return;
+    const len = userTyped.length;
+    for (let i = 0; i < spanCache.length; i++) {
+        let cls = "z-correct";
+        if (i < len) {
+            cls = (userTyped[i] === targetText[i]) ? "z-correct" : "z-error";
+        }
+        if (showCursor && i === len) cls += " z-cursor";
+        if (i === activeDotIndex) cls += " z-line-dot";
+        if (spanCache[i].className !== cls) spanCache[i].className = cls;
+    }
+    panelText.innerText = `LOCKED: ${len}/${targetText.length}`;
+}
+
+// --- 7. Positioning & Lines ---
+function checkLineChange() {
+    if (!spanCache[userTyped.length]) return;
+    let newTop = spanCache[userTyped.length].offsetTop;
+    if (currentLineTop === -1 || Math.abs(newTop - currentLineTop) > 5) {
+        currentLineTop = newTop;
+        activeDotIndex = -1;
+        for (let i = userTyped.length; i < spanCache.length; i++) {
+            if (spanCache[i].offsetTop > currentLineTop + 5) {
+                activeDotIndex = i;
+                break;
+            }
+        }
+    }
+}
+
+function syncPosition() {
+    if (isActive && targetElement && overlay) {
+        const rect = targetElement.getBoundingClientRect();
+        overlay.style.top = (rect.top + window.scrollY) + "px";
+        overlay.style.left = (rect.left + window.scrollX) + "px";
+        overlay.style.width = rect.width + "px";
+        overlay.style.height = rect.height + "px";
+        overlay.scrollTop = targetElement.scrollTop;
+    }
+    requestAnimationFrame(syncPosition);
+}
